@@ -1,0 +1,15 @@
+{
+  "name": "iss-toilet-tracker-bridge",
+  "version": "1.0.0",
+  "description": "Lightstreamer bridge for ISS toilet tracker ESP8266 project",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "lightstreamer-client-node": "^9.2.2"
+  },
+  "engines": {
+    "node": ">=14.x"
+  }
+}
