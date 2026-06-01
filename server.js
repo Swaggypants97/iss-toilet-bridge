@@ -1,51 +1,49 @@
-// ISS Toilet Tracker - Lightstreamer Bridge (with ISS clock + field dump)
-// Connects to NASA's Lightstreamer feed and exposes NODE3000005 + TIME_000001 via HTTP
+// ISS Toilet Tracker - Lightstreamer Bridge
+// Decodes NASA's TimeStamp (hours since Jan 1 00:00 UTC) into a real ISO datetime
 
 const http = require('http');
 const LightstreamerClient = require('lightstreamer-client-node').LightstreamerClient;
 const Subscription = require('lightstreamer-client-node').Subscription;
 
-// Store the latest urine tank value
 let latestValue = {
   value: "0",
   timestamp: "0",
-  lastUpdate: new Date()
-};
-
-// Store the latest ISS time data (all fields, for inspection)
-let latestISSTime = {
-  gmt: "0",
-  raw: {},
+  dataTime: null,         // decoded ISO datetime of actual ISS reading
   lastUpdate: new Date()
 };
 
 console.log('[ISS-BRIDGE] Starting ISS Toilet Tracker Bridge...');
 
-// Connect to Lightstreamer
 const lsClient = new LightstreamerClient("https://push.lightstreamer.com", "ISSLIVE");
 lsClient.connectionOptions.setSlowingEnabled(false);
 
-// Subscribe to NODE3000005 (Urine Tank)
-const subTank = new Subscription("MERGE", ["NODE3000005"], ["Value", "TimeStamp"]);
-lsClient.subscribe(subTank);
+const sub = new Subscription("MERGE", ["NODE3000005"], ["Value", "TimeStamp"]);
+lsClient.subscribe(sub);
 
-// Subscribe to TIME_000001 (ISS GMT clock) - subscribe to multiple possible field names
-const subTime = new Subscription(
-  "MERGE",
-  ["TIME_000001"],
-  ["Value", "TimeStamp", "GMT", "Time", "Status.Class", "Status.Indicator"]
-);
-lsClient.subscribe(subTime);
-
-// Handle connection status
 lsClient.addListener({
   onStatusChange: function(status) {
     console.log('[ISS-BRIDGE] Lightstreamer status:', status);
   }
 });
 
-// Handle NODE3000005 (urine tank) updates
-subTank.addListener({
+// Decode NASA TimeStamp (hours since Jan 1 00:00 UTC of current year)
+// into a real Date object. Uses the year from "now" as the reference.
+function decodeNasaTimestamp(timestampStr) {
+  const totalHours = parseFloat(timestampStr);
+  if (isNaN(totalHours)) return null;
+
+  const now = new Date();
+  const year = now.getUTCFullYear();
+
+  // Jan 1 of current year, 00:00 UTC
+  const startOfYear = Date.UTC(year, 0, 1, 0, 0, 0, 0);
+
+  // Add totalHours worth of milliseconds
+  const dataMs = startOfYear + totalHours * 3600 * 1000;
+  return new Date(dataMs);
+}
+
+sub.addListener({
   onSubscription: function() {
     console.log('[ISS-BRIDGE] ✅ Subscribed to NODE3000005 (Urine Tank)');
   },
@@ -55,51 +53,24 @@ subTank.addListener({
   onItemUpdate: function(update) {
     const value = update.getValue("Value");
     const timestamp = update.getValue("TimeStamp");
+    const dataTime = decodeNasaTimestamp(timestamp);
 
     latestValue = {
       value: value || "0",
       timestamp: timestamp || "0",
+      dataTime: dataTime,
       lastUpdate: new Date()
     };
-
-    console.log(`[ISS-BRIDGE] 📊 Urine Tank: ${latestValue.value}%`);
-  }
-});
-
-// Handle TIME_000001 (ISS GMT) updates - log all fields to figure out which one we want
-subTime.addListener({
-  onSubscription: function() {
-    console.log('[ISS-BRIDGE] ✅ Subscribed to TIME_000001 (ISS GMT)');
-  },
-  onUnsubscription: function() {
-    console.log('[ISS-BRIDGE] ⚠️  Unsubscribed from TIME_000001');
-  },
-  onItemUpdate: function(update) {
-    const value     = update.getValue("Value");
-    const timestamp = update.getValue("TimeStamp");
-    const gmt       = update.getValue("GMT");
-    const time      = update.getValue("Time");
 
     console.log(
-      `[ISS-BRIDGE] 🕐 ISS TIME fields:` +
-      ` Value=${value}` +
-      ` TimeStamp=${timestamp}` +
-      ` GMT=${gmt}` +
-      ` Time=${time}`
+      `[ISS-BRIDGE] 📊 Urine Tank: ${latestValue.value}% ` +
+      `(reading from ${dataTime ? dataTime.toISOString() : 'unknown'})`
     );
-
-    latestISSTime = {
-      gmt: gmt || time || value || "0",
-      raw: { value, timestamp, gmt, time },
-      lastUpdate: new Date()
-    };
   }
 });
 
-// Connect to Lightstreamer
 lsClient.connect();
 
-// Create HTTP server for ESP8266 to poll
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
@@ -111,10 +82,12 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       level: parseFloat(latestValue.value) || 0,
       timestamp: latestValue.timestamp,
-      lastUpdate: latestValue.lastUpdate.toISOString(),
-      issGmt: latestISSTime.gmt,
-      issGmtRaw: latestISSTime.raw,
-      issGmtFetched: latestISSTime.lastUpdate.toISOString(),
+      // lastUpdate now reflects the ACTUAL ISS data timestamp (decoded),
+      // not the bridge's wall-clock time. This is what the ESP displays.
+      lastUpdate: latestValue.dataTime
+        ? latestValue.dataTime.toISOString()
+        : latestValue.lastUpdate.toISOString(),
+      bridgeReceivedAt: latestValue.lastUpdate.toISOString(),
       status: "ok"
     }));
   } else if (req.url === '/health') {
@@ -128,6 +101,4 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[ISS-BRIDGE] 🚀 Server running on port ${PORT}`);
-  console.log(`[ISS-BRIDGE] 🌐 Endpoint: http://localhost:${PORT}/`);
-  console.log(`[ISS-BRIDGE] 📡 Waiting for ISS data...`);
 });
