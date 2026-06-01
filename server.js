@@ -35,10 +35,9 @@ function decodeNasaTimestamp(timestampStr) {
   const now = new Date();
   const year = now.getUTCFullYear();
 
-  // Jan 1 of current year, 00:00 UTC
-  const startOfYear = Date.UTC(year, 0, 1, 0, 0, 0, 0);
-
-  // Add totalHours worth of milliseconds
+  // NASA's hour counter starts at "Jan 0 00:00 UTC", so subtract one day
+  // to align with the JavaScript epoch where Jan 1 00:00 = day 1.
+  const startOfYear = Date.UTC(year, 0, 1, 0, 0, 0, 0) - 86400 * 1000;
   const dataMs = startOfYear + totalHours * 3600 * 1000;
   return new Date(dataMs);
 }
